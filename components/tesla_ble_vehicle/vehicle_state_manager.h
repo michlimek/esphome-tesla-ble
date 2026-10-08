@@ -125,7 +125,7 @@ public:
     // ==========================================================================
     // Connection state management
     // ==========================================================================
-    void set_sensors_available(bool available);
+    void update_vehicle_reachable(bool reachable);
     void reset_all_states();
     
     // ==========================================================================
@@ -221,10 +221,6 @@ private:
         }
       }
       return false;
-    }
-
-    template<typename T> static void set_sensor_available(T *entity, bool available) {
-      if (entity != nullptr) entity->set_has_state(available);
     }
 
 };
