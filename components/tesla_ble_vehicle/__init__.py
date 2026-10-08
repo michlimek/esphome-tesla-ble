@@ -112,6 +112,9 @@ TESLA_ROLES = {
 #   - step: step size
 
 BINARY_SENSORS = [
+    # Connection state
+    {"id": "vehicle_reachable", "name": "Vehicle Reachable", "icon": "mdi:bluetooth-connect", "device_class": "connectivity", "entity_category": "diagnostic"},
+
     # VCSEC sensors
     {"id": "asleep", "name": "Asleep", "icon": "mdi:sleep"},
     {"id": "user_present", "name": "User Present", "icon": "mdi:account-check", "device_class": "occupancy"},

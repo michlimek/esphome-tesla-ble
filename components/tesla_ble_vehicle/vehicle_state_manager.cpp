@@ -4,6 +4,9 @@
 #ifdef USE_API
 #include <esphome/components/api/api_server.h>
 #endif
+#ifdef USE_CONTROLLER_REGISTRY
+#include <esphome/core/controller_registry.h>
+#endif
 #include <esphome/core/helpers.h>
 #include <cmath>
 #include <algorithm>
@@ -11,6 +14,87 @@
 
 namespace esphome {
 namespace tesla_ble_vehicle {
+
+namespace {
+
+template<typename T> bool clear_entity_state(T *entity) {
+    if (entity == nullptr || !entity->has_state()) {
+        return false;
+    }
+    entity->set_has_state(false);
+    return true;
+}
+
+void invalidate_binary_sensor_state(binary_sensor::BinarySensor *entity) {
+    if (entity != nullptr) {
+        entity->invalidate_state();
+    }
+}
+
+void invalidate_sensor_state(sensor::Sensor *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_sensor_update(entity);
+#endif
+}
+
+void invalidate_text_sensor_state(text_sensor::TextSensor *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_text_sensor_update(entity);
+#endif
+}
+
+void invalidate_switch_state(switch_::Switch *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_switch_update(entity);
+#endif
+}
+
+void invalidate_number_state(number::Number *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_number_update(entity);
+#endif
+}
+
+void invalidate_lock_state(lock::Lock *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_lock_update(entity);
+#endif
+}
+
+void invalidate_cover_state(cover::Cover *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_cover_update(entity);
+#endif
+}
+
+void invalidate_climate_state(climate::Climate *entity) {
+    if (!clear_entity_state(entity)) {
+        return;
+    }
+#ifdef USE_CONTROLLER_REGISTRY
+    ControllerRegistry::notify_climate_update(entity);
+#endif
+}
+
+}  // namespace
 
 // The raw values duplicated in state_text.h must match the nanopb-generated
 // enums/tags from the tesla-ble library, or every state conversion would be
@@ -148,7 +232,7 @@ void VehicleStateManager::update_sleep_status(VCSEC_VehicleSleepStatus_E status)
     if (asleep.has_value()) {
         update_asleep(asleep.value());
     } else {
-        set_sensor_available(get_binary_sensor("asleep"), false);
+        invalidate_binary_sensor_state(get_binary_sensor("asleep"));
     }
 }
 
@@ -164,7 +248,7 @@ void VehicleStateManager::update_user_presence(VCSEC_UserPresence_E presence) {
     if (present.has_value()) {
         update_user_present(present.value());
     } else {
-        set_sensor_available(get_binary_sensor("user_present"), false);
+        invalidate_binary_sensor_state(get_binary_sensor("user_present"));
     }
 }
 
@@ -372,7 +456,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         const bool latch_disengaged = (charge_state.charge_port_latch.which_type == CarServer_ChargePortLatchState_Disengaged_tag);
         if (charge_port_latch_lock_ != nullptr && (latch_engaged || latch_disengaged)) {
             auto new_state = latch_engaged ? lock::LOCK_STATE_LOCKED : lock::LOCK_STATE_UNLOCKED;
-            if (charge_port_latch_lock_->state != new_state) {
+            if (!charge_port_latch_lock_->has_state() || charge_port_latch_lock_->state != new_state) {
                 charge_port_latch_lock_->publish_state(new_state);
                 ESP_LOGD(STATE_MANAGER_TAG, "Charge port latch: %s", latch_engaged ? "ENGAGED (locked)" : "DISENGAGED (unlocked)");
             }
@@ -582,7 +666,7 @@ void VehicleStateManager::update_unlocked(bool unlocked) {
     // Update doors lock entity
     if (doors_lock_ != nullptr) {
         auto new_state = unlocked ? lock::LOCK_STATE_UNLOCKED : lock::LOCK_STATE_LOCKED;
-        if (doors_lock_->state != new_state) {
+        if (!doors_lock_->has_state() || doors_lock_->state != new_state) {
             doors_lock_->publish_state(new_state);
             ESP_LOGI(STATE_MANAGER_TAG, "Vehicle lock state: %s", unlocked ? "UNLOCKED" : "LOCKED");
         }
@@ -670,18 +754,51 @@ void VehicleStateManager::update_estimated_power() {
 // Connection state management
 // =============================================================================
 
-void VehicleStateManager::set_sensors_available(bool available) {
-    ESP_LOGD(STATE_MANAGER_TAG, "Setting sensors available: %s", available ? "true" : "false");
-    
-    // Set availability for key binary sensors
-    set_sensor_available(get_binary_sensor("asleep"), available);
-    set_sensor_available(get_binary_sensor("user_present"), available);
+void VehicleStateManager::update_vehicle_reachable(bool reachable) {
+    publish_binary_sensor("vehicle_reachable", reachable);
 }
 
 void VehicleStateManager::reset_all_states() {
     ESP_LOGD(STATE_MANAGER_TAG, "Resetting all vehicle states");
     is_charging_ = false;
-    set_sensors_available(false);
+    current_inside_temp_ = NAN;
+    climate_on_ = false;
+    cached_charger_voltage_ = NAN;
+    cached_charger_current_ = NAN;
+    cached_charger_phases_.reset();
+
+    update_vehicle_reachable(false);
+
+    // A lost BLE session means vehicle-derived values are no longer known.
+    // Do not publish false/zero values: that would incorrectly mean the car
+    // is known to be unplugged, stopped, unlocked, etc. Clear entity state and
+    // notify controllers so Home Assistant gets missing_state=true immediately.
+    for (const auto &pair : binary_sensors_) {
+        if (pair.first != "vehicle_reachable") {
+            invalidate_binary_sensor_state(pair.second);
+        }
+    }
+    for (const auto &pair : sensors_) {
+        invalidate_sensor_state(pair.second);
+    }
+    for (const auto &pair : text_sensors_) {
+        if (pair.first != "last_command") {
+            invalidate_text_sensor_state(pair.second);
+        }
+    }
+
+    invalidate_switch_state(charging_switch_);
+    invalidate_switch_state(sentry_mode_switch_);
+    invalidate_switch_state(steering_wheel_heat_switch_);
+    invalidate_number_state(charging_amps_number_);
+    invalidate_number_state(charging_limit_number_);
+    invalidate_lock_state(doors_lock_);
+    invalidate_lock_state(charge_port_latch_lock_);
+    invalidate_cover_state(trunk_cover_);
+    invalidate_cover_state(frunk_cover_);
+    invalidate_cover_state(windows_cover_);
+    invalidate_cover_state(charge_port_door_cover_);
+    invalidate_climate_state(climate_);
 }
 
 // =============================================================================
@@ -690,23 +807,25 @@ void VehicleStateManager::reset_all_states() {
 
 bool VehicleStateManager::is_asleep() const {
     auto* sensor = get_binary_sensor("asleep");
-    return sensor ? sensor->state : true;
+    return sensor != nullptr && sensor->has_state() ? sensor->state : true;
 }
 
 bool VehicleStateManager::is_sentry_mode() const {
-    return sentry_mode_switch_ != nullptr && sentry_mode_switch_->state;
+    return sentry_mode_switch_ != nullptr && sentry_mode_switch_->has_state() && sentry_mode_switch_->state;
 }
 
 bool VehicleStateManager::is_charge_flap_open() const {
     // Use charge port door cover entity if available
-    if (charge_port_door_cover_) {
+    if (charge_port_door_cover_ != nullptr && charge_port_door_cover_->has_state()) {
         return charge_port_door_cover_->position == cover::COVER_OPEN;
     }
     return false;
 }
 
 float VehicleStateManager::get_charging_amps() const {
-    return charging_amps_number_ ? charging_amps_number_->state : 0.0f;
+    return charging_amps_number_ != nullptr && charging_amps_number_->has_state()
+               ? charging_amps_number_->state
+               : 0.0f;
 }
 
 // =============================================================================

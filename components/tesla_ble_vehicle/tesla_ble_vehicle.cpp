@@ -162,6 +162,9 @@ void TeslaBLEVehicle::configure_pending_sensors() {
   if (pending_climate_)
     state_manager_->set_climate(pending_climate_);
 
+  // Publish a definite initial reachability state before the first connection.
+  state_manager_->update_vehicle_reachable(false);
+
   ESP_LOGD(TAG, "Configured %d binary, %d numeric, %d text sensors",
            pending_binary_sensors_.size(), pending_sensors_.size(),
            pending_text_sensors_.size());
@@ -972,6 +975,10 @@ void TeslaBLEVehicle::gattc_event_handler(esp_gattc_cb_event_t event,
 
   case ESP_GATTC_DISCONNECT_EVT:
     ESP_LOGW(TAG, "BLE disconnected");
+    // DISCONNECT_EVT arrives before CLOSE_EVT for a passive link loss. Clear
+    // stale vehicle state immediately while ESP-IDF finishes link cleanup.
+    if (state_manager_)
+      state_manager_->reset_all_states();
     this->read_handle_ = 0;
     this->write_handle_ = 0;
     this->node_state = espbt::ClientState::DISCONNECTING;
@@ -1040,6 +1047,8 @@ void TeslaBLEVehicle::gattc_event_handler(esp_gattc_cb_event_t event,
 void TeslaBLEVehicle::handle_connection_established() {
   if (vehicle_) {
     vehicle_->set_connected(true);
+    if (state_manager_)
+      state_manager_->update_vehicle_reachable(true);
     ESP_LOGI(TAG, "Connection established - triggering initial polls");
     vehicle_->vcsec_poll();
     vehicle_->infotainment_poll(TeslaBLE::WakePolicy::WAKE_IF_NEEDED);
@@ -1054,6 +1063,8 @@ void TeslaBLEVehicle::handle_connection_established() {
 void TeslaBLEVehicle::handle_connection_lost() {
   if (vehicle_)
     vehicle_->set_connected(false);
+  if (state_manager_)
+    state_manager_->reset_all_states();
   if (ble_adapter_)
     ble_adapter_->clear_queues();
 

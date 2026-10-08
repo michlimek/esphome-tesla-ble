@@ -35,6 +35,7 @@ The generic package targets the classic ESP32 (`esp32dev`). Do not use it for ES
 - [x] Wake vehicle, set charging amps/limit, start/stop charging
 - [x] Sensors: asleep/awake, locked/unlocked, user presence, charge port, BLE signal, IEC 61851
 - [x] Charging sensors: battery level, charge rate, energy added, time to full, charger phases
+- [x] Vehicle reachability; vehicle-derived states become unavailable when BLE disconnects
 
 ## Installation
 
